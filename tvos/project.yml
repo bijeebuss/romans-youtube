@@ -1,0 +1,34 @@
+name: RomansTube
+options:
+  bundleIdPrefix: net.welnick
+  deploymentTarget:
+    tvOS: "17.0"
+  createIntermediateGroups: true
+
+targets:
+  RomansTube:
+    type: application
+    platform: tvOS
+    sources:
+      - Sources
+      - Resources
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: net.welnick.RomansTube
+        MARKETING_VERSION: "1.0"
+        CURRENT_PROJECT_VERSION: "1"
+        ASSETCATALOG_COMPILER_APPICON_NAME: "App Icon & Top Shelf Image"
+        TARGETED_DEVICE_FAMILY: "3"  # tvOS
+        SWIFT_VERSION: "5.0"
+        # Set this to your Apple Developer Team ID so signing "just works".
+        # DEVELOPMENT_TEAM: ABCDE12345
+    info:
+      path: Resources/Info.plist
+      properties:
+        CFBundleDisplayName: Roman's Tube
+        UIRequiredDeviceCapabilities: [arm64]
+        # The home server is plain HTTP on the LAN — allow it. (Private app, LAN only.)
+        NSAppTransportSecurity:
+          NSAllowsArbitraryLoads: true
+          NSAllowsLocalNetworking: true
+        NSLocalNetworkUsageDescription: "Connects to your home media server to load approved videos."

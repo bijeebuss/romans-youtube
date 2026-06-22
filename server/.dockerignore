@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+shorts_cache.json
+channels.json
+*.tmp
+.venv/
+venv/

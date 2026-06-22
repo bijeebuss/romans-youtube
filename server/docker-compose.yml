@@ -1,0 +1,24 @@
+services:
+  romanstube:
+    build: .
+    # Or, if you'd rather not build on the Pi, pin the image you push to a registry.
+    container_name: romanstube
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      # CHANGE THIS — it protects the /admin page where you manage channels.
+      ADMIN_USER: "admin"
+      ADMIN_PASSWORD: "changeme"
+      DATA_DIR: "/data"
+      MAX_HEIGHT: "1080"         # max video height (1080, 720, …)
+      # Optional tuning:
+      # X264_PRESET: "veryfast"  # transcode speed/quality when 1080p is VP9/AV1
+      # FEED_TTL: "600"          # seconds before the feed is rebuilt from RSS
+      # PER_CHANNEL_LIMIT: "15"  # newest videos kept per channel
+    volumes:
+      # Whitelist + shorts cache persist here across rebuilds.
+      - romanstube-data:/data
+
+volumes:
+  romanstube-data:

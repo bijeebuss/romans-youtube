@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Roman's Tube — Approved Channels</title>
+  <style>
+    :root { color-scheme: light dark; }
+    body { font-family: -apple-system, system-ui, sans-serif; max-width: 720px;
+           margin: 2rem auto; padding: 0 1rem; line-height: 1.5; }
+    h1 { font-size: 1.4rem; }
+    form.add { display: flex; gap: .5rem; margin: 1rem 0 1.5rem; }
+    input[type=text] { flex: 1; padding: .6rem .7rem; font-size: 1rem;
+                       border: 1px solid #999; border-radius: 8px; }
+    button { padding: .6rem 1rem; font-size: 1rem; border: 0; border-radius: 8px;
+             background: #e0245e; color: #fff; cursor: pointer; }
+    button.del { background: transparent; color: #e0245e; border: 1px solid #e0245e;
+                 padding: .3rem .7rem; font-size: .85rem; }
+    ul { list-style: none; padding: 0; }
+    li { display: flex; align-items: center; justify-content: space-between; gap: 1rem;
+         padding: .7rem .2rem; border-bottom: 1px solid #8884; }
+    .channel { display: flex; align-items: center; gap: .75rem; min-width: 0; }
+    .avatar { width: 44px; height: 44px; border-radius: 50%; flex: 0 0 44px;
+              background: #8882; color: #888; display: grid; place-items: center;
+              font-weight: 700; overflow: hidden; position: relative; }
+    .avatar .initial { position: absolute; inset: 0; display: grid; place-items: center; }
+    .avatar img { position: absolute; inset: 0; width: 100%; height: 100%;
+                  object-fit: cover; display: block; }
+    .meta { min-width: 0; }
+    .name { font-weight: 600; }
+    .cid { color: #888; font-size: .8rem; overflow-wrap: anywhere; }
+    .error { color: #e0245e; margin: .5rem 0; }
+    .hint { color: #888; font-size: .85rem; }
+  </style>
+</head>
+<body>
+  <h1>📺 Roman's Tube — Approved Channels</h1>
+  <p class="hint">Paste a channel URL, an <code>@handle</code>, or a <code>UC…</code> channel id.</p>
+
+  {% if error %}<p class="error">⚠️ {{ error }}</p>{% endif %}
+
+  <form class="add" method="post" action="/admin/add">
+    <input type="text" name="channel" placeholder="https://youtube.com/@NatGeo or @NatGeo"
+           value="{{ value or '' }}" autofocus>
+    <button type="submit">Add</button>
+  </form>
+
+  <ul>
+    {% for c in channels %}
+      <li>
+        <span class="channel">
+          <span class="avatar" aria-hidden="true">
+            <span class="initial">{{ (c.name or c.id)[:1] }}</span>
+            {% if c.icon %}
+              <img src="{{ c.icon }}" alt="" loading="lazy"
+                   onerror="this.remove();">
+            {% endif %}
+          </span>
+          <span class="meta">
+            <span class="name">{{ c.name }}</span><br>
+            <span class="cid">{{ c.id }}</span>
+          </span>
+        </span>
+        <form method="post" action="/admin/delete" onsubmit="return confirm('Remove {{ c.name }}?')">
+          <input type="hidden" name="id" value="{{ c.id }}">
+          <button class="del" type="submit">Remove</button>
+        </form>
+      </li>
+    {% else %}
+      <li>No channels yet — add one above.</li>
+    {% endfor %}
+  </ul>
+
+  <p class="hint">{{ channels|length }} channel(s) approved. Shorts and unplayable videos are filtered out automatically.</p>
+</body>
+</html>
