@@ -17,26 +17,27 @@ struct ContentView: View {
 
     var body: some View {
         NavigationStack {
-            TabView {
-                Group {
-                    if !config.isConfigured {
-                        unconfiguredView
-                    } else {
-                        feedView
-                    }
+            Group {
+                if !config.isConfigured {
+                    unconfiguredView
+                } else if !config.hasSelectedProfile {
+                    ProfileSelectionView()
+                        .environmentObject(config)
+                } else {
+                    mainTabs
                 }
-                .tabItem {
-                    Label("Home", systemImage: "play.rectangle")
-                }
-
-                SubscriptionsView(loadingVideo: loadingVideo, onPlay: play)
-                    .environmentObject(config)
-                    .tabItem {
-                        Label("Subscriptions", systemImage: "rectangle.stack")
-                    }
             }
             .navigationTitle("Roman-Tube")
             .toolbar {
+                if config.hasSelectedProfile {
+                    ToolbarItem(placement: .topBarLeading) {
+                        Button {
+                            config.selectedProfileID = nil
+                        } label: {
+                            Image(systemName: "person.crop.circle")
+                        }
+                    }
+                }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button {
                         showSettings = true
@@ -60,6 +61,10 @@ struct ContentView: View {
         .onChange(of: showSettings) { _, isShowing in
             if !isShowing { refreshFeed() }
         }
+        .onChange(of: config.selectedProfileID) { _, _ in
+            model.vm?.clear()
+            refreshFeed()
+        }
         .onChange(of: playerURL) { _, url in
             if url == nil { refreshFeed() }
         }
@@ -81,6 +86,21 @@ struct ContentView: View {
     }
 
     // MARK: - Feed
+
+    private var mainTabs: some View {
+        TabView {
+            feedView
+                .tabItem {
+                    Label("Home", systemImage: "play.rectangle")
+                }
+
+            SubscriptionsView(loadingVideo: loadingVideo, onPlay: play)
+                .environmentObject(config)
+                .tabItem {
+                    Label("Subscriptions", systemImage: "rectangle.stack")
+                }
+        }
+    }
 
     private var feedView: some View {
         ScrollView {
@@ -138,7 +158,7 @@ struct ContentView: View {
     }
 
     private func refreshFeed() {
-        guard config.isConfigured else { return }
+        guard config.isConfigured, config.hasSelectedProfile else { return }
         Task {
             if model.vm == nil {
                 model.configure(with: config)
@@ -169,4 +189,124 @@ final class FeedViewModelHolder: ObservableObject {
 struct PlayableItem: Identifiable {
     let url: URL
     var id: String { url.absoluteString }
+}
+
+private struct ProfileSelectionView: View {
+    @EnvironmentObject var config: AppConfig
+
+    @State private var profiles: [UserProfile] = []
+    @State private var isLoading = false
+    @State private var errorMessage: String?
+
+    private let columns = [GridItem(.adaptive(minimum: 240, maximum: 320), spacing: 36)]
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 28) {
+                Text("Choose a profile")
+                    .font(.title2.weight(.semibold))
+
+                if isLoading && profiles.isEmpty {
+                    ProgressView("Loading profiles...")
+                        .frame(maxWidth: .infinity)
+                        .padding(.top, 80)
+                } else if let errorMessage, profiles.isEmpty {
+                    VStack(spacing: 24) {
+                        Image(systemName: "person.crop.circle.badge.exclamationmark")
+                            .font(.system(size: 80))
+                        Text(errorMessage)
+                            .multilineTextAlignment(.center)
+                        Button("Try Again") { Task { await loadProfiles() } }
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.top, 80)
+                } else {
+                    LazyVGrid(columns: columns, spacing: 36) {
+                        ForEach(profiles) { profile in
+                            Button {
+                                config.selectedProfileID = profile.id
+                            } label: {
+                                VStack(spacing: 18) {
+                                    ProfileAvatarView(profile: profile)
+                                    Text(profile.name)
+                                        .font(.headline)
+                                        .lineLimit(2)
+                                        .multilineTextAlignment(.center)
+                                }
+                                .frame(maxWidth: .infinity, minHeight: 210)
+                                .padding(22)
+                                .background(.thinMaterial)
+                                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                }
+            }
+            .padding(48)
+        }
+        .task(id: config.serverAddress) {
+            await loadProfiles()
+        }
+    }
+
+    @MainActor
+    private func loadProfiles() async {
+        guard !isLoading else { return }
+        guard let url = config.profilesURL() else {
+            errorMessage = "Set the server address in Settings first."
+            return
+        }
+
+        isLoading = true
+        errorMessage = nil
+        defer { isLoading = false }
+
+        do {
+            var request = URLRequest(url: url)
+            request.timeoutInterval = 20
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
+                errorMessage = "Server returned an unexpected response."
+                return
+            }
+            profiles = try JSONDecoder().decode(ProfilesResponse.self, from: data).profiles
+            if profiles.isEmpty {
+                errorMessage = "No profiles yet. Create one on the server's /admin page."
+            }
+        } catch {
+            errorMessage = "Couldn't reach the server.\n\(error.localizedDescription)"
+        }
+    }
+}
+
+private struct ProfileAvatarView: View {
+    let profile: UserProfile
+
+    private let size: CGFloat = 132
+
+    var body: some View {
+        ZStack {
+            Circle()
+                .fill(.secondary.opacity(0.18))
+
+            AsyncImage(url: profile.pictureURL) { phase in
+                if let image = phase.image {
+                    image
+                        .resizable()
+                        .scaledToFill()
+                } else {
+                    Text(profile.name.prefix(1).uppercased())
+                        .font(.system(size: 48, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+        .frame(width: size, height: size)
+        .clipShape(Circle())
+        .overlay(
+            Circle()
+                .stroke(.white.opacity(0.18), lineWidth: 1)
+        )
+    }
 }

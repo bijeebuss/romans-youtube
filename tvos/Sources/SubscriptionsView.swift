@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 struct SubscriptionsView: View {
     @EnvironmentObject var config: AppConfig
@@ -26,12 +27,19 @@ struct SubscriptionsView: View {
                         ChannelVideosView(channel: channel, loadingVideo: loadingVideo, onPlay: onPlay)
                             .environmentObject(config)
                     } label: {
-                        VStack(alignment: .leading, spacing: 6) {
-                            Text(channel.name)
-                                .font(.headline)
-                            Text(channel.id)
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
+                        HStack(spacing: 20) {
+                            ChannelIconView(channel: channel)
+
+                            VStack(alignment: .leading, spacing: 6) {
+                                Text(channel.name)
+                                    .font(.headline)
+                                    .lineLimit(1)
+                                    .truncationMode(.tail)
+                                Text(channel.id)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(1)
+                            }
                         }
                         .padding(.vertical, 8)
                     }
@@ -41,6 +49,73 @@ struct SubscriptionsView: View {
         .onAppear {
             model.configure(with: config)
             Task { await model.load() }
+        }
+    }
+}
+
+private struct ChannelIconView: View {
+    let channel: Channel
+
+    @State private var image: UIImage?
+
+    private let size: CGFloat = 72
+    private static let cache = NSCache<NSURL, UIImage>()
+
+    var body: some View {
+        ZStack {
+            Circle()
+                .fill(.secondary.opacity(0.18))
+
+            if let image {
+                Image(uiImage: image)
+                    .resizable()
+                    .scaledToFill()
+            } else {
+                fallback
+            }
+        }
+        .frame(width: size, height: size)
+        .clipShape(Circle())
+        .overlay(
+            Circle()
+                .stroke(.white.opacity(0.18), lineWidth: 1)
+        )
+        .task(id: channel.iconURL) {
+            await loadIcon()
+        }
+    }
+
+    private var fallback: some View {
+        Text(channel.name.prefix(1).uppercased())
+            .font(.title2.weight(.semibold))
+            .foregroundStyle(.secondary)
+    }
+
+    @MainActor
+    private func loadIcon() async {
+        guard let iconURL = channel.iconURL else {
+            image = nil
+            return
+        }
+
+        let cacheKey = iconURL as NSURL
+        if let cached = Self.cache.object(forKey: cacheKey) {
+            image = cached
+            return
+        }
+
+        do {
+            let (data, response) = try await URLSession.shared.data(from: iconURL)
+            guard
+                let http = response as? HTTPURLResponse,
+                http.statusCode == 200,
+                let loaded = UIImage(data: data)
+            else { return }
+
+            Self.cache.setObject(loaded, forKey: cacheKey)
+            image = loaded
+        } catch {
+            image = nil
         }
     }
 }

@@ -104,7 +104,9 @@ You normally do not need to set these yourself.
 The feed also probes video playability with yt-dlp after removing Shorts. Definite
 unplayable results such as geo-blocked, private, removed, or age-restricted
 videos are cached in `playability_cache.json` and hidden from feeds. Tune this
-with `PLAYABILITY_CACHE_TTL` and `PLAYABILITY_PROBE_WORKERS` if needed.
+with `PLAYABILITY_CACHE_TTL` and `PLAYABILITY_PROBE_WORKERS` if needed. Feed
+rebuilds fetch channel RSS feeds in parallel; tune that with `FEED_RSS_WORKERS`.
+Each rebuild logs RSS, Shorts, playability, and total timings.
 
 ## Endpoints
 

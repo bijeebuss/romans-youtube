@@ -57,12 +57,15 @@ BASE_DIR = Path(__file__).resolve().parent
 DATA_DIR = Path(os.environ.get("DATA_DIR", BASE_DIR))
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 CHANNELS_FILE = DATA_DIR / "channels.json"
+PROFILES_FILE = DATA_DIR / "profiles.json"
+PROFILE_PICTURES_DIR = DATA_DIR / "profile_pictures"
 SHORTS_CACHE_FILE = DATA_DIR / "shorts_cache.json"
 PLAYABILITY_CACHE_FILE = DATA_DIR / "playability_cache.json"
+PROFILE_PICTURES_DIR.mkdir(parents=True, exist_ok=True)
 
 ADMIN_USER = os.environ.get("ADMIN_USER", "admin")
 ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "changeme")
-APP_VERSION = os.environ.get("APP_VERSION", "2026-06-22.7")
+APP_VERSION = os.environ.get("APP_VERSION", "2026-06-22.9")
 
 # How long to trust a cached feed before rebuilding from RSS (seconds).
 FEED_TTL = int(os.environ.get("FEED_TTL", "600"))  # 10 minutes
@@ -70,6 +73,8 @@ FEED_TTL = int(os.environ.get("FEED_TTL", "600"))  # 10 minutes
 PER_CHANNEL_LIMIT = int(os.environ.get("PER_CHANNEL_LIMIT", "15"))
 # How many items the merged feed returns.
 FEED_LIMIT = int(os.environ.get("FEED_LIMIT", "200"))
+# How many channel RSS feeds to fetch in parallel while rebuilding the feed.
+FEED_RSS_WORKERS = max(1, int(os.environ.get("FEED_RSS_WORKERS", "8")))
 
 # Playback / HLS settings.
 MAX_HEIGHT = int(os.environ.get("MAX_HEIGHT", "1080"))   # 1080, 720, etc.
@@ -85,11 +90,14 @@ SHORTS_PROBE_TIMEOUT = float(os.environ.get("SHORTS_PROBE_TIMEOUT", "3"))
 SHORTS_PROBE_WORKERS = int(os.environ.get("SHORTS_PROBE_WORKERS", "12"))
 PLAYABILITY_CACHE_TTL = int(os.environ.get("PLAYABILITY_CACHE_TTL", "86400"))
 PLAYABILITY_PROBE_WORKERS = int(os.environ.get("PLAYABILITY_PROBE_WORKERS", "3"))
+CHANNEL_ICON_SIZE = int(os.environ.get("CHANNEL_ICON_SIZE", "176"))
 USER_AGENT = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
     "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36"
 )
 CHANNEL_ID_RE = re.compile(r"UC[\w-]{22}")
+PROFILE_ID_RE = re.compile(r"[a-z0-9][a-z0-9_-]{0,39}")
+LEGACY_PROFILE_ID = "default"
 YTDLP_JS_RUNTIMES = [
     item.strip()
     for item in os.environ.get("YTDLP_JS_RUNTIMES", "node").split(",")
@@ -170,18 +178,130 @@ def _tool_version(command: str):
     return (proc.stdout or proc.stderr or "present").splitlines()[0]
 
 
-def load_channels():
-    """Returns a list of {'id': 'UC...', 'name': '...'} dicts."""
-    return _load_json(CHANNELS_FILE, [])
+def _profile_slug(name: str):
+    slug = re.sub(r"[^a-z0-9_-]+", "-", name.strip().lower())
+    slug = re.sub(r"-+", "-", slug).strip("-_")
+    return slug[:40] or "profile"
 
 
-def save_channels(channels):
+def _default_profile():
+    legacy_channels = _load_json(CHANNELS_FILE, [])
+    if not isinstance(legacy_channels, list):
+        legacy_channels = []
+    return {
+        "id": LEGACY_PROFILE_ID,
+        "name": "Default",
+        "picture": "",
+        "channels": legacy_channels,
+    }
+
+
+def _normalize_profile(profile):
+    if not isinstance(profile, dict):
+        return None
+    profile_id = str(profile.get("id") or "").strip().lower()
+    if not PROFILE_ID_RE.fullmatch(profile_id):
+        return None
+    name = str(profile.get("name") or profile_id).strip() or profile_id
+    channels = profile.get("channels") if isinstance(profile.get("channels"), list) else []
+    return {
+        "id": profile_id,
+        "name": name,
+        "picture": str(profile.get("picture") or ""),
+        "channels": channels,
+    }
+
+
+def load_profiles():
+    raw = _load_json(PROFILES_FILE, None)
+    profiles = raw.get("profiles") if isinstance(raw, dict) else raw
+    if isinstance(profiles, list):
+        normalized = [p for p in (_normalize_profile(profile) for profile in profiles) if p]
+        if normalized:
+            return normalized
+
+    profiles = [_default_profile()]
+    save_profiles(profiles)
+    return profiles
+
+
+def save_profiles(profiles):
     with _lock:
-        _save_json(CHANNELS_FILE, channels)
+        _save_json(PROFILES_FILE, {"profiles": profiles})
 
 
-def admin_channels():
-    channels = load_channels()
+def get_profile(profile_id: str | None):
+    profile_id = (profile_id or LEGACY_PROFILE_ID).strip().lower()
+    return next((profile for profile in load_profiles() if profile["id"] == profile_id), None)
+
+
+def create_profile(name: str):
+    name = name.strip()
+    if not name:
+        raise ValueError("Profile name is required")
+
+    profiles = load_profiles()
+    existing_ids = {profile["id"] for profile in profiles}
+    base = _profile_slug(name)
+    profile_id = base
+    suffix = 2
+    while profile_id in existing_ids:
+        profile_id = f"{base[:36]}-{suffix}"
+        suffix += 1
+
+    profile = {"id": profile_id, "name": name, "picture": "", "channels": []}
+    profiles.append(profile)
+    save_profiles(profiles)
+    return profile
+
+
+def rename_profile(profile_id: str, name: str):
+    name = name.strip()
+    if not name:
+        raise ValueError("Profile name is required")
+
+    profiles = load_profiles()
+    for profile in profiles:
+        if profile["id"] == profile_id:
+            profile["name"] = name
+            save_profiles(profiles)
+            return profile
+    raise ValueError("Profile not found")
+
+
+def save_profile(profile):
+    profiles = load_profiles()
+    for idx, existing in enumerate(profiles):
+        if existing["id"] == profile["id"]:
+            profiles[idx] = profile
+            save_profiles(profiles)
+            return
+    profiles.append(profile)
+    save_profiles(profiles)
+
+
+def load_channels(profile_id: str | None = None):
+    """Returns a profile's list of {'id': 'UC...', 'name': '...'} dicts."""
+    profile = get_profile(profile_id)
+    return list(profile.get("channels", [])) if profile else []
+
+
+def save_channels(channels, profile_id: str | None = None):
+    profile_id = (profile_id or LEGACY_PROFILE_ID).strip().lower()
+    profiles = load_profiles()
+    for profile in profiles:
+        if profile["id"] == profile_id:
+            profile["channels"] = channels
+            with _lock:
+                _save_json(PROFILES_FILE, {"profiles": profiles})
+                if profile_id == LEGACY_PROFILE_ID:
+                    _save_json(CHANNELS_FILE, channels)
+            return
+    raise ValueError("Profile not found")
+
+
+def admin_channels(profile_id: str | None = None):
+    channels = load_channels(profile_id)
     changed = False
     for ch in channels:
         if ch.get("id") and not ch.get("icon"):
@@ -190,8 +310,26 @@ def admin_channels():
                 ch["icon"] = icon
                 changed = True
     if changed:
-        save_channels(channels)
+        save_channels(channels, profile_id)
     return channels
+
+
+def _profile_picture_for_api(profile):
+    picture = _normalize_icon_url(profile.get("picture"))
+    if picture:
+        return picture
+    picture = profile.get("picture") or ""
+    if picture.startswith("/"):
+        return request.host_url.rstrip("/") + picture
+    return None
+
+
+def _profile_for_api(profile):
+    return {
+        "id": profile["id"],
+        "name": profile["name"],
+        "picture": _profile_picture_for_api(profile),
+    }
 
 
 # --------------------------------------------------------------------------
@@ -346,7 +484,7 @@ _ATOM = "{http://www.w3.org/2005/Atom}"
 _YT = "{http://www.youtube.com/xml/schemas/2015}"
 _MEDIA = "{http://search.yahoo.com/mrss/}"
 
-_feed_cache = {"built_at": 0.0, "items": []}
+_feed_cache = {}
 _feed_lock = threading.Lock()
 
 
@@ -475,15 +613,29 @@ def fetch_channel_videos_page(channel, offset=0, limit=24):
     return videos, len(info.get("entries") or []) >= limit
 
 
-def build_feed():
+def build_feed(profile_id: str | None = None):
     """Merge all whitelisted channels into one chronological feed (newest first)."""
-    channels = load_channels()
+    total_started = time.perf_counter()
+    channels = load_channels(profile_id)
     all_videos = []
-    for ch in channels:
-        all_videos.extend(_fetch_channel_videos(ch))
+
+    rss_started = time.perf_counter()
+    if channels:
+        worker_count = min(FEED_RSS_WORKERS, len(channels))
+        with ThreadPoolExecutor(max_workers=worker_count) as executor:
+            for videos in executor.map(_fetch_channel_videos, channels):
+                all_videos.extend(videos)
+    rss_seconds = time.perf_counter() - rss_started
+
+    rss_video_count = len(all_videos)
+    shorts_seconds = 0.0
+    playability_seconds = 0.0
+    shorts_filtered_count = 0
+    unplayable_filtered_count = 0
 
     # Drop Shorts.
     if all_videos:
+        shorts_started = time.perf_counter()
         worker_count = min(SHORTS_PROBE_WORKERS, len(all_videos))
         with ThreadPoolExecutor(max_workers=worker_count) as executor:
             shorts_by_id = dict(
@@ -493,7 +645,14 @@ def build_feed():
                 )
             )
         filtered = [v for v in all_videos if not shorts_by_id.get(v["id"], False)]
-        filtered = _filter_unplayable_videos(filtered)
+        shorts_filtered_count = len(all_videos) - len(filtered)
+        shorts_seconds = time.perf_counter() - shorts_started
+
+        playability_started = time.perf_counter()
+        playable = _filter_unplayable_videos(filtered)
+        unplayable_filtered_count = len(filtered) - len(playable)
+        playability_seconds = time.perf_counter() - playability_started
+        filtered = playable
     else:
         filtered = []
 
@@ -504,19 +663,36 @@ def build_feed():
             return datetime.min.replace(tzinfo=timezone.utc)
 
     filtered.sort(key=sort_key, reverse=True)
-    return filtered[:FEED_LIMIT]
+    result = filtered[:FEED_LIMIT]
+    app.logger.info(
+        "built feed profile=%s channels=%d rss_videos=%d shorts_filtered=%d "
+        "unplayable_filtered=%d returned=%d timings rss=%.2fs shorts=%.2fs "
+        "playability=%.2fs total=%.2fs",
+        (profile_id or LEGACY_PROFILE_ID),
+        len(channels),
+        rss_video_count,
+        shorts_filtered_count,
+        unplayable_filtered_count,
+        len(result),
+        rss_seconds,
+        shorts_seconds,
+        playability_seconds,
+        time.perf_counter() - total_started,
+    )
+    return result
 
 
-def get_feed(force=False):
+def get_feed(profile_id: str | None = None, force=False):
+    profile_id = (profile_id or LEGACY_PROFILE_ID).strip().lower()
     with _feed_lock:
-        fresh = (time.time() - _feed_cache["built_at"]) < FEED_TTL
-        if _feed_cache["items"] and fresh and not force:
-            return _feed_cache["items"]
+        cache = _feed_cache.setdefault(profile_id, {"built_at": 0.0, "items": []})
+        fresh = (time.time() - cache["built_at"]) < FEED_TTL
+        if cache["items"] and fresh and not force:
+            return cache["items"]
     # Build outside the lock (network-bound) then publish.
-    items = build_feed()
+    items = build_feed(profile_id)
     with _feed_lock:
-        _feed_cache["items"] = items
-        _feed_cache["built_at"] = time.time()
+        _feed_cache[profile_id] = {"items": items, "built_at": time.time()}
     return items
 
 
@@ -923,6 +1099,17 @@ def _normalize_icon_url(url: str | None):
     return url if url.startswith(("http://", "https://")) else None
 
 
+def _channel_icon_for_api(url: str | None):
+    url = _normalize_icon_url(url)
+    if not url:
+        return None
+
+    parsed = urlparse(url)
+    if parsed.hostname and parsed.hostname.endswith("googleusercontent.com"):
+        return re.sub(r"=s\d+", f"=s{CHANNEL_ICON_SIZE}", url, count=1)
+    return url
+
+
 def _channel_name_from_rss(cid: str):
     try:
         r = requests.get(
@@ -962,11 +1149,13 @@ def require_admin(fn):
 
 @app.get("/health")
 def health():
+    profiles = load_profiles()
     return jsonify(
         {
             "ok": True,
             "version": APP_VERSION,
-            "channels": len(load_channels()),
+            "profiles": len(profiles),
+            "channels": sum(len(profile.get("channels", [])) for profile in profiles),
             "ytDlp": ytdlp_version.__version__,
             "ytDlpEjs": _package_version("yt-dlp-ejs"),
             "jsRuntimes": YTDLP_JS_RUNTIMES,
@@ -981,17 +1170,46 @@ def health():
     )
 
 
+@app.get("/api/profiles")
+def api_profiles():
+    profiles = sorted(load_profiles(), key=lambda profile: profile["name"].lower())
+    return jsonify({"profiles": [_profile_for_api(profile) for profile in profiles]})
+
+
 @app.get("/api/feed")
 def api_feed():
     force = request.args.get("refresh") == "1"
     return jsonify({"videos": get_feed(force=force)})
 
 
+@app.get("/api/profiles/<profile_id>/feed")
+def api_profile_feed(profile_id):
+    if get_profile(profile_id) is None:
+        return jsonify({"error": "profile_not_found"}), 404
+    force = request.args.get("refresh") == "1"
+    return jsonify({"videos": get_feed(profile_id, force=force)})
+
+
 @app.get("/api/channels")
 def api_channels():
+    return _channels_response(LEGACY_PROFILE_ID)
+
+
+@app.get("/api/profiles/<profile_id>/channels")
+def api_profile_channels(profile_id):
+    if get_profile(profile_id) is None:
+        return jsonify({"error": "profile_not_found"}), 404
+    return _channels_response(profile_id)
+
+
+def _channels_response(profile_id):
     channels = [
-        {"id": ch["id"], "name": ch.get("name") or ch["id"]}
-        for ch in load_channels()
+        {
+            "id": ch["id"],
+            "name": ch.get("name") or ch["id"],
+            "icon": _channel_icon_for_api(ch.get("icon")),
+        }
+        for ch in load_channels(profile_id)
         if ch.get("id")
     ]
     channels.sort(key=lambda ch: ch["name"].lower())
@@ -1000,7 +1218,18 @@ def api_channels():
 
 @app.get("/api/channels/<channel_id>/videos")
 def api_channel_videos(channel_id):
-    channels = load_channels()
+    return _channel_videos_response(LEGACY_PROFILE_ID, channel_id)
+
+
+@app.get("/api/profiles/<profile_id>/channels/<channel_id>/videos")
+def api_profile_channel_videos(profile_id, channel_id):
+    if get_profile(profile_id) is None:
+        return jsonify({"error": "profile_not_found"}), 404
+    return _channel_videos_response(profile_id, channel_id)
+
+
+def _channel_videos_response(profile_id, channel_id):
+    channels = load_channels(profile_id)
     channel = next((ch for ch in channels if ch["id"] == channel_id), None)
     if channel is None:
         return jsonify({"error": "channel_not_found"}), 404
@@ -1066,6 +1295,15 @@ def hls_file(video_id, filename):
     return send_file(path, mimetype=mimetype, conditional=True)
 
 
+@app.get("/profile_pictures/<path:filename>")
+def profile_picture_file(filename):
+    safe = os.path.basename(filename)
+    path = PROFILE_PICTURES_DIR / safe
+    if not path.exists():
+        return jsonify({"error": "not_found"}), 404
+    return send_file(path, conditional=True)
+
+
 # --------------------------------------------------------------------------
 # Routes — Web admin
 # --------------------------------------------------------------------------
@@ -1073,35 +1311,142 @@ def hls_file(video_id, filename):
 @app.get("/admin")
 @require_admin
 def admin():
-    return render_template("admin.html", channels=admin_channels())
+    return _render_admin()
 
 
-@app.post("/admin/add")
+@app.post("/admin/profiles")
 @require_admin
-def admin_add():
+def admin_create_profile():
+    try:
+        profile = create_profile(request.form.get("name", ""))
+    except ValueError as exc:
+        return _render_admin(error=str(exc))
+    return redirect(url_for("admin_profile", profile_id=profile["id"]))
+
+
+@app.get("/admin/<profile_id>")
+@require_admin
+def admin_profile(profile_id):
+    if get_profile(profile_id) is None:
+        return _render_admin(error="Profile not found"), 404
+    return _render_admin(profile_id=profile_id)
+
+
+@app.post("/admin/<profile_id>/name")
+@require_admin
+def admin_rename_profile(profile_id):
+    try:
+        rename_profile(profile_id, request.form.get("name", ""))
+    except ValueError as exc:
+        status = 404 if str(exc) == "Profile not found" else 400
+        return _render_admin(profile_id=profile_id, error=str(exc)), status
+    return redirect(url_for("admin_profile", profile_id=profile_id))
+
+
+@app.post("/admin/<profile_id>/add")
+@require_admin
+def admin_add(profile_id):
+    if get_profile(profile_id) is None:
+        return _render_admin(error="Profile not found"), 404
     raw = request.form.get("channel", "")
     try:
         ch = resolve_channel(raw)
     except ValueError as exc:
-        return render_template(
-            "admin.html", channels=admin_channels(), error=str(exc), value=raw
-        )
-    channels = load_channels()
+        return _render_admin(profile_id=profile_id, error=str(exc), value=raw)
+    channels = load_channels(profile_id)
     if not any(c["id"] == ch["id"] for c in channels):
         channels.append(ch)
-        save_channels(channels)
-        get_feed(force=True)  # rebuild so the new channel shows up immediately
-    return redirect(url_for("admin"))
+        save_channels(channels, profile_id)
+        get_feed(profile_id, force=True)  # rebuild so the new channel shows up immediately
+    return redirect(url_for("admin_profile", profile_id=profile_id))
 
 
-@app.post("/admin/delete")
+@app.post("/admin/<profile_id>/delete")
 @require_admin
-def admin_delete():
+def admin_delete(profile_id):
+    if get_profile(profile_id) is None:
+        return _render_admin(error="Profile not found"), 404
     cid = request.form.get("id", "")
-    channels = [c for c in load_channels() if c["id"] != cid]
-    save_channels(channels)
-    get_feed(force=True)
-    return redirect(url_for("admin"))
+    channels = [c for c in load_channels(profile_id) if c["id"] != cid]
+    save_channels(channels, profile_id)
+    get_feed(profile_id, force=True)
+    return redirect(url_for("admin_profile", profile_id=profile_id))
+
+
+@app.post("/admin/<profile_id>/picture")
+@require_admin
+def admin_set_picture(profile_id):
+    profile = get_profile(profile_id)
+    if profile is None:
+        return _render_admin(error="Profile not found"), 404
+
+    if request.form.get("clear_picture") == "1":
+        profile["picture"] = ""
+        save_profile(profile)
+        return redirect(url_for("admin_profile", profile_id=profile_id))
+
+    picture_url = request.form.get("picture_url", "").strip()
+    upload = request.files.get("picture")
+    if upload and upload.filename:
+        ext = _uploaded_picture_extension(upload)
+        if ext is None:
+            return _render_admin(
+                profile_id=profile_id,
+                error="Profile picture must be a PNG, JPEG, GIF, or WebP image.",
+            )
+        filename = f"{profile_id}{ext}"
+        upload.save(PROFILE_PICTURES_DIR / filename)
+        profile["picture"] = url_for("profile_picture_file", filename=filename)
+        save_profile(profile)
+    elif picture_url:
+        if not _normalize_icon_url(picture_url):
+            return _render_admin(profile_id=profile_id, error="Profile picture URL must start with http:// or https://.")
+        profile["picture"] = picture_url
+        save_profile(profile)
+
+    return redirect(url_for("admin_profile", profile_id=profile_id))
+
+
+def _uploaded_picture_extension(upload):
+    content_type = (upload.mimetype or "").lower()
+    if content_type == "image/png":
+        return ".png"
+    if content_type in {"image/jpeg", "image/jpg"}:
+        return ".jpg"
+    if content_type == "image/gif":
+        return ".gif"
+    if content_type == "image/webp":
+        return ".webp"
+    suffix = Path(upload.filename or "").suffix.lower()
+    return suffix if suffix in {".png", ".jpg", ".jpeg", ".gif", ".webp"} else None
+
+
+def _admin_profiles():
+    profiles = load_profiles()
+    profiles.sort(key=lambda profile: profile["name"].lower())
+    return [
+        {
+            **profile,
+            "picture_url": _profile_picture_for_api(profile),
+            "channel_count": len(profile.get("channels", [])),
+        }
+        for profile in profiles
+    ]
+
+
+def _render_admin(profile_id: str | None = None, **kwargs):
+    selected_profile = get_profile(profile_id) if profile_id else None
+    channels = admin_channels(profile_id) if selected_profile else []
+    return render_template(
+        "admin.html",
+        profiles=_admin_profiles(),
+        selected_profile={
+            **selected_profile,
+            "picture_url": _profile_picture_for_api(selected_profile),
+        } if selected_profile else None,
+        channels=channels,
+        **kwargs,
+    )
 
 
 if __name__ == "__main__":

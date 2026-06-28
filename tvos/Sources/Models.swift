@@ -27,9 +27,30 @@ struct FeedResponse: Codable {
     let videos: [Video]
 }
 
+struct UserProfile: Codable, Identifiable, Hashable {
+    let id: String
+    let name: String
+    let picture: String?
+
+    var pictureURL: URL? {
+        guard let picture, !picture.isEmpty else { return nil }
+        return URL(string: picture)
+    }
+}
+
+struct ProfilesResponse: Codable {
+    let profiles: [UserProfile]
+}
+
 struct Channel: Codable, Identifiable, Hashable {
     let id: String
     let name: String
+    let icon: String?
+
+    var iconURL: URL? {
+        guard let icon, !icon.isEmpty else { return nil }
+        return URL(string: icon)
+    }
 }
 
 struct ChannelsResponse: Codable {

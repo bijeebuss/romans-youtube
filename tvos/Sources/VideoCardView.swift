@@ -8,7 +8,7 @@ struct VideoCardView: View {
 
     private let thumbnailCornerRadius: CGFloat = 16
     private let titleHeight: CGFloat = 62
-    private let metadataHeight: CGFloat = 26
+    private let metadataHeight: CGFloat = 34
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -44,12 +44,17 @@ struct VideoCardView: View {
                 .frame(height: titleHeight, alignment: .topLeading)
 
             HStack {
-                Text(video.channel).font(.subheadline).foregroundStyle(.secondary)
+                Text(video.channel)
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .truncationMode(.tail)
                 Spacer()
-                Text(video.relativeAge).font(.caption).foregroundStyle(.tertiary)
+                Text(video.relativeAge)
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
             }
             .lineLimit(1)
-            .frame(height: metadataHeight, alignment: .top)
+            .frame(minHeight: metadataHeight, alignment: .top)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .hoverEffect()          // tvOS focus lift

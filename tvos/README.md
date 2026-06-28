@@ -58,10 +58,8 @@ The app opens to **Settings**. Enter your server address, e.g. `192.168.1.50:800
 ## App icon
 
 `Resources/Assets.xcassets` contains the required tvOS "App Icon & Top Shelf
-Image" brand asset, but the image wells are **empty** (blank icon). The app
-builds and runs fine like this. To give it a real icon, open the asset catalog
-in Xcode and drag artwork into the layers (a 400×240 and 1280×768 icon, plus
-top-shelf images).
+Image" brand asset. The icon and top-shelf wells are populated from
+`icon.png` with the required 1x and 2x renditions.
 
 ## How it behaves
 

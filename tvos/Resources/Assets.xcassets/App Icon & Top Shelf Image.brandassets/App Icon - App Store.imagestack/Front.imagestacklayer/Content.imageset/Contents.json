@@ -1,2 +1,7 @@
-{ "images" : [ { "idiom" : "tv", "scale" : "1x" }, { "idiom" : "tv", "scale" : "2x" } ],
-  "info" : { "author" : "xcode", "version" : 1 } }
+{
+  "images" : [
+    { "filename" : "AppStore-Front-1280x768.png", "idiom" : "tv", "scale" : "1x" },
+    { "filename" : "AppStore-Front-2560x1536.png", "idiom" : "tv", "scale" : "2x" }
+  ],
+  "info" : { "author" : "xcode", "version" : 1 }
+}

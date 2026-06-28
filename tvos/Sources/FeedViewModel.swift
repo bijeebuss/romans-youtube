@@ -12,10 +12,15 @@ final class FeedViewModel: ObservableObject {
         self.config = config
     }
 
+    func clear() {
+        videos = []
+        errorMessage = nil
+    }
+
     func load(refresh: Bool = false) async {
         guard !isLoading else { return }
         guard let url = config.feedURL(refresh: refresh) else {
-            errorMessage = "Set the server address in Settings first."
+            errorMessage = "Choose a profile first."
             return
         }
         isLoading = true
@@ -23,7 +28,7 @@ final class FeedViewModel: ObservableObject {
         defer { isLoading = false }
         do {
             var request = URLRequest(url: url)
-            request.timeoutInterval = 30
+            request.timeoutInterval = 120
             print("Loading feed from \(url.absoluteString)")
             let (data, response) = try await URLSession.shared.data(for: request)
             guard let http = response as? HTTPURLResponse else {
@@ -41,7 +46,7 @@ final class FeedViewModel: ObservableObject {
             videos = decoded.videos
             print("Loaded \(videos.count) feed videos")
             if videos.isEmpty {
-                errorMessage = "No videos yet. Add channels on the server's /admin page."
+                errorMessage = "No videos yet. Add channels for this profile on the server's /admin page."
             }
         } catch {
             errorMessage = "Couldn't reach the server.\n\(error.localizedDescription)"

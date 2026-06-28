@@ -15,6 +15,7 @@ services:
       # Optional tuning:
       # X264_PRESET: "veryfast"  # transcode speed/quality when 1080p is VP9/AV1
       # FEED_TTL: "600"          # seconds before the feed is rebuilt from RSS
+      # FEED_RSS_WORKERS: "8"    # channel RSS feeds to fetch in parallel
       # PER_CHANNEL_LIMIT: "15"  # newest videos kept per channel
     volumes:
       # Whitelist + shorts cache persist here across rebuilds.

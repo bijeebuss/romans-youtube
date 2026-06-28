@@ -7,15 +7,21 @@ final class SubscriptionsViewModel: ObservableObject {
     @Published var errorMessage: String?
 
     private var config: AppConfig?
+    private var profileID: String?
 
     func configure(with config: AppConfig) {
         self.config = config
+        if profileID != config.selectedProfileID {
+            profileID = config.selectedProfileID
+            channels = []
+            errorMessage = nil
+        }
     }
 
     func load() async {
         guard !isLoading else { return }
         guard let url = config?.channelsURL() else {
-            errorMessage = "Set the server address in Settings first."
+            errorMessage = "Choose a profile first."
             return
         }
 
@@ -33,7 +39,7 @@ final class SubscriptionsViewModel: ObservableObject {
             }
             channels = try JSONDecoder().decode(ChannelsResponse.self, from: data).channels
             if channels.isEmpty {
-                errorMessage = "No subscriptions yet. Add channels on the server's /admin page."
+                errorMessage = "No subscriptions yet. Add channels for this profile on the server's /admin page."
             }
         } catch {
             errorMessage = "Couldn't reach the server.\n\(error.localizedDescription)"
@@ -51,13 +57,15 @@ final class ChannelVideosViewModel: ObservableObject {
     private let pageSize = 24
     private var config: AppConfig?
     private var channel: Channel?
+    private var profileID: String?
     private var nextOffset = 0
     private var hasMore = true
 
     func configure(with config: AppConfig, channel: Channel) {
         self.config = config
-        if self.channel != channel {
+        if self.channel != channel || profileID != config.selectedProfileID {
             self.channel = channel
+            profileID = config.selectedProfileID
             videos = []
             nextOffset = 0
             hasMore = true
